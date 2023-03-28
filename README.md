@@ -1,35 +1,39 @@
-# AutoMemoryModule: A PyTorch Memory Mechanism for Large Language Models
+# AutoMemoryModule: A PyTorch Memory Mechanism for Large Language Models #
 
-The AutoMemoryModule is a PyTorch implementation of a dynamic memory mechanism for large language models. It retains important tokens from input sentences, improving model performance by utilizing this context. Particularly useful for tasks requiring the model to remember crucial information from previous inputs while processing new ones.
+The AutoMemoryModule is a PyTorch module that helps large language models to remember important tokens from previous inputs while processing new ones, improving the model's performance by utilizing the context. It is particularly useful for tasks requiring the model to remember crucial information from previous inputs while processing new ones.
 
-## Key Features
-- **Dynamic Memory**: Adapts to input sequences, retaining only important tokens.
-- **Long-term Dependency Handling**: Improves long-term context understanding in tasks.
-- **Scalability**: Configurable memory size for different tasks and memory requirements.
-- **Memory Efficiency**: Dynamic threshold mechanism prevents memory waste.
-- **Easy Integration**: Effortlessly integrates into existing large language models as an additional component.
+## Key Features ##
 
-## Mechanism Overview
-1. **Score Network**: Computes importance scores for tokens in the input sentence and memory context.
-2. **Threshold Network**: Computes a dynamic threshold based on the importance scores of the current memory context.
+    - Dynamic Memory: Adapts to input sequences, retaining only important tokens.
+    - Long-term Dependency Handling: Improves long-term context understanding in tasks.
+    - Scalability: Configurable memory size for different tasks and memory requirements.
+    - Memory Efficiency: Dynamic scoring mechanism prevents memory waste.
+    - Easy Integration: Effortlessly integrates into existing large language models as an additional component.
 
-The module processes an input sentence and a memory context, calculates importance scores for tokens, computes a dynamic threshold, retains tokens with scores above the threshold, and updates the memory context while maintaining a predefined maximum size.
+## Mechanism Overview ##
 
-## Neural Networks
-- Score Network: `nn.Sequential(nn.Linear(max_memory_size, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, max_memory_size), nn.Sigmoid())`
-- Threshold Network: `nn.Sequential(nn.Linear(max_memory_size, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1), nn.Sigmoid())`
+    - Score Network: Computes importance scores for tokens in the input sentence and memory context.
+    - Memory Context Update: Retains tokens with scores above a certain threshold, updates the memory context while maintaining a predefined maximum size.
 
-## Token Importance Score Calculation
-1. Compute new token importance scores.
-2. Compute memory context token importance scores.
-3. Calculate the dynamic threshold using the threshold network.
+The module processes an input sentence and a memory context, calculates importance scores for tokens, retains tokens with scores above a certain threshold, and updates the memory context while maintaining a predefined maximum size.
 
-## Memory Context Update
-1. Combine tokens and importance scores.
-2. Retain tokens with scores greater than or equal to the dynamic threshold.
-3. Limit memory context size to the predefined maximum.
+## Neural Networks ##
 
-# Usage Example: Training a Simple Language Model
+    - Score Network: nn.Sequential(nn.Linear(embedding_size * max_sentence_length, 64), nn.ReLU(), nn.Linear(64, max_sentence_length), nn.Sigmoid())
+
+## Token Importance Score Calculation ##
+
+    - Compute new token importance scores based on the score network.
+    - Compute memory context token importance scores based on the score network.
+
+## Memory Context Update ##
+
+    - Combine the input tokens and memory context.
+    - Retain tokens with scores greater than or equal to a certain threshold.
+    - Limit memory context size to the predefined maximum.
+
+## Usage Example: Training a Simple Language Model ##
+
 Train a simple large language model using the AutoMemoryModule to predict the next word in a sentence with a sample dataset.
 
 ## Training ##
