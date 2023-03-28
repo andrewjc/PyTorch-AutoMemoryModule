@@ -9,11 +9,6 @@ import torch.nn as nn
 # - Responsible for computing the importance scores for both the new sentence
 #   tokens and the current memory context.
 #
-# Threshold Net:
-# - Calculates a dynamic threshold factor based on the mean of the memory context.
-#   The threshold is then used to filter the combined tokens, retaining only the ones
-#   above the threshold.
-
 # The memory context is updated with the filtered tokens and their corresponding
 # importance scores.
 #
