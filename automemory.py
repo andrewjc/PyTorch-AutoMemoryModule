@@ -1,88 +1,90 @@
 import torch
 import torch.nn as nn
 
-"""
-Title: AutoMemoryModule.py
-Author: Andrew Cranston <andrew.cranston@gmail.com>
 
-Description:
-    AutoMemoryModule is a PyTorch-based memory mechanism designed to improve
-    large language model performance by selectively retaining important tokens.
-    This module uses two neural networks, score_net and threshold_net, to assign
-    importance scores to tokens and determine a dynamic threshold for token retention.
-    The primary goal is to maintain an up-to-date memory context, making it ideal for
-    various NLP tasks such as sentiment analysis, text classification, and translation.
-"""
+# LLM auto memory module
+# Provide a mechanism for self pruning of the memory context.
+#
+# Score Net:
+# - Responsible for computing the importance scores for both the new sentence
+#   tokens and the current memory context.
+#
+# Threshold Net:
+# - Calculates a dynamic threshold factor based on the mean of the memory context.
+#   The threshold is then used to filter the combined tokens, retaining only the ones
+#   above the threshold.
+
+# The memory context is updated with the filtered tokens and their corresponding
+# importance scores.
+#
+# If the memory context exceeds the maximum size, it is trimmed down to the top most
+# important tokens.
 
 class AutoMemoryModule(nn.Module):
-    def __init__(self, token_dim, hidden_dim, max_memory_size, padding_token=0):
-        super(AutoMemoryModule, self).__init__()
+    def __init__(self, embedding_layer, max_sentence_length, max_memory_context, embedding_size, padding_token, device='cpu'):
+        super().__init__()
+        self.vocab_size = 32000
+        self.max_sentence_length = max_sentence_length
+        self.max_memory_context = max_memory_context
+        self.embedding_size = embedding_size
+        self.device = device
         self.padding_token = padding_token
-        self.token_dim = token_dim
-        self.hidden_dim = hidden_dim
-        self.max_memory_size = max_memory_size
-
-        self.importance = torch.randn(0)
+        self.embedding = embedding_layer
 
         self.score_net = nn.Sequential(
-            nn.Linear(max_memory_size, hidden_dim),
+            nn.Linear(self.embedding_size * (self.max_sentence_length), 64),
             nn.ReLU(),
-            nn.Linear(hidden_dim, max_memory_size),
+            nn.Linear(64, max_sentence_length),
             nn.Sigmoid(),
-        )
+        ).to(device=device)
 
-        self.threshold_net = nn.Sequential(
-            nn.Linear(max_memory_size, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1),
-            nn.Sigmoid(),
-        )
+    def forward(self, input_tokens, memory_context):
+        if memory_context is None:
+            memory_context = torch.zeros(self.max_memory_context, dtype=torch.long).to(device=self.device)
+            # fill memory context with padding tokens
+            memory_context.fill_(self.padding_token)
 
-    def forward(self, sentence_tokens, memory_context):
-        sentence_tokens = sentence_tokens.float()
-        padded_sentence_tokens = torch.cat([sentence_tokens, torch.zeros(self.max_memory_size - sentence_tokens.shape[0])])
+        input_tokens = input_tokens.to(device=self.device)
+        padded_input_tokens = nn.functional.pad(input_tokens, (0, self.max_sentence_length - input_tokens.shape[-1]),
+                                                value=self.padding_token)
 
-        # Compute masks for sentence_tokens to ignore padding tokens during score computation
-        sentence_tokens_mask = (padded_sentence_tokens != self.padding_token)
+        # score the padding_input_tokens
+        input_tokens_embedding = self.embedding(padded_input_tokens).to(device=self.device).view(1, -1)
+        input_tokens_scoring = self.score_net(input_tokens_embedding).squeeze(dim=0)
 
-        # Compute importance scores for the new tokens
-        # pad sentence_tokens to the max_memory_size
-        new_importance_scores = self.score_net(padded_sentence_tokens).squeeze()
-        new_importance_scores = (new_importance_scores * sentence_tokens_mask.float()).squeeze()
+        memory_context_embedding = self.embedding(memory_context).to(device=self.device).view(1, -1)
+        memory_context_scoring = self.score_net(memory_context_embedding).squeeze(dim=0)
 
-        # Check if memory_context is not None, then compute importance scores and mask
-        if memory_context is not None:
-            memory_context = memory_context.float()
+        # filter out the padding tokens from the padded input tokens and their scores
 
-            memory_context_mask = (memory_context != self.padding_token).unsqueeze(-1)
-            current_importance_scores = self.score_net(memory_context).squeeze()
-            current_importance_scores = (current_importance_scores * memory_context_mask.float()).squeeze()
-        else:
-            current_importance_scores = torch.zeros_like(new_importance_scores)
-            memory_context = torch.zeros(self.max_memory_size)
+        padding_token_idx = torch.nonzero(padded_input_tokens != self.padding_token).squeeze(dim=1)
+        filtered_input_tokens = padded_input_tokens[padding_token_idx]
+        filtered_input_tokens_scoring = input_tokens_scoring[padding_token_idx]
 
-        # Calculate the dynamic threshold for retaining tokens
+        ctx_padding_token_idx = torch.nonzero(memory_context != self.padding_token).squeeze(dim=1)
+        filtered_memory_context = memory_context[ctx_padding_token_idx]
+        filtered_memory_context_scoring = torch.index_select(memory_context_scoring, 0, ctx_padding_token_idx)
 
-        threshold_factor = self.threshold_net(current_importance_scores).item()
+        # combine the filtered input tokens and their scores with the memory context
+        # and their scores
+        combined_tokens = torch.cat((filtered_input_tokens, filtered_memory_context), dim=0)
+        scores = torch.cat((filtered_input_tokens_scoring, filtered_memory_context_scoring), dim=0)
 
-        # Combine new tokens and current memory context, along with their importance scores
-        combined_tokens = torch.cat([memory_context, padded_sentence_tokens], dim=0)
-        combined_importance = torch.cat([current_importance_scores, new_importance_scores], dim=0)
+        # remove duplicate tokens and their scores
+        unique_tokens, indices = torch.unique(combined_tokens, return_inverse=True)
+        unique_scores = torch.full_like(unique_tokens, -1e20, dtype=scores.dtype)
+        unique_scores = unique_scores.scatter(0, indices, scores)
 
-        # Filter the tokens based on the dynamic threshold
-        mask = combined_importance >= threshold_factor
+        # sort the combined tokens and their scores by the scores
+        sorted_scores, sorted_indices = torch.sort(unique_scores, descending=True)
+        sorted_combined_tokens = unique_tokens[sorted_indices]
 
-        # Update the memory context and importance
-        memory_context = combined_tokens[mask]
-        self.importance = combined_importance[mask]
+        # trim the combined tokens and their scores to the max memory context size
+        trimmed_combined_tokens = sorted_combined_tokens[:self.max_memory_context]
+        trimmed_scores = sorted_scores[:self.max_memory_context]
 
-        # Limit the size of the memory context if it exceeds the maximum size
-        if memory_context.size(0) > self.max_memory_size:
-            sorted_indices = torch.argsort(self.importance, descending=True)
-            memory_context = memory_context[sorted_indices[:self.max_memory_size]]
-            self.importance = self.importance[sorted_indices[:self.max_memory_size]]
-        else:
-            memory_context = torch.cat([memory_context, torch.zeros(self.max_memory_size - memory_context.shape[0])])
-            combined_importance = torch.cat([self.importance, torch.zeros(self.max_memory_size - self.importance.shape[0])])
+        # pad the trimmed tokens and their scores with padding tokens and -1e20 respectively
+        trimmed_combined_tokens = nn.functional.pad(trimmed_combined_tokens, (0, self.max_memory_context - trimmed_combined_tokens.shape[-1]), value=self.padding_token)
+        trimmed_scores = nn.functional.pad(trimmed_scores, (0, self.max_memory_context - trimmed_scores.shape[-1]), value=-1e20)
 
-        return memory_context.clone().detach(), combined_importance.clone().detach()
+        return trimmed_combined_tokens, trimmed_scores
